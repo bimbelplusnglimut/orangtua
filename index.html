@@ -411,16 +411,49 @@ try { if (top !== self) top.location = self.location; } catch (e) { document.doc
 
 /* ---------- Waktu & status kelas ---------- */
 const pad = n => String(n).padStart(2, '0');
-const hariIni = () => { const d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); };
+const hariIni = () => {
+  const d = new Date();
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+};
+
 function waktuKelas(j) {
-  const [a, b] = String(j.jam || '').split('-').map(s => s.trim()), f = h => { const m = /^(\d{1,2})[:.](\d{2})$/.exec(h || ''); return m ? new Date(j.tanggal + 'T' + pad(+m[1]) + ':' + m[2] + ':00') : null; };
-  return { mulai: f(a) || new Date(j.tanggal + 'T00:00:00'), selesai: f(b) || new Date(j.tanggal + 'T23:59:59') };
-}
-function statusKelas(j) {
-  const w = waktuKelas(j), n = new Date(), lewat = n > w.selesai;
-  return { lewat, kunci: n >= w.mulai, hariIni: j.tanggal === hariIni() && !lewat, hadir: !!j.hadir && !lewat, izin: !lewat && !j.hadir && j.izin ? j.izin : null };
+  // Mendukung tanda hubung en-dash (–), em-dash (—), maupun minus (-)
+  const parts = String(j.jam || '').split(/[–—-]/).map(s => s.trim());
+  const [a, b] = parts;
+  const tglMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(j.tanggal || '').trim());
+
+  const buatDate = (hStr, defH, defM) => {
+    const m = /^(\d{1,2})[:.](\d{2})$/.exec(hStr || '');
+    const hh = m ? +m[1] : defH;
+    const mm = m ? +m[2] : defM;
+    if (tglMatch) {
+      return new Date(+tglMatch[1], +tglMatch[2] - 1, +tglMatch[3], hh, mm, 0, 0);
+    }
+    return new Date(String(j.tanggal || '') + 'T' + pad(hh) + ':' + pad(mm) + ':00');
+  };
+
+  return {
+    mulai: buatDate(a, 0, 0),
+    selesai: buatDate(b, 23, 59)
+  };
 }
 
+function statusKelas(j) {
+  const w = waktuKelas(j);
+  const n = new Date();
+  const lewat = n > w.selesai;
+  const kunci = n >= w.mulai;
+  const hadir = !!j.hadir && !lewat;
+  return {
+    lewat,
+    kunci,
+    hariIni: j.tanggal === hariIni() && !lewat,
+    hadir,
+    // Izin hanya bisa diubah/dibatalkan sebelum jam mulai kelas
+    izin: !lewat && !kunci && !hadir && j.izin ? j.izin : null,
+    izinAktif: !lewat && !hadir && j.izin ? j.izin : null
+  };
+}
 /* ---------- Mode demo (versi Tahap 1) ---------- */
 Object.assign(DM, { iz: {}, p: { ortu: 'Bpk. Hadi', siswa: 'Raka Pratama' }, pw: '1234' });
 const hm = d => pad(d.getHours()) + ':' + pad(d.getMinutes()), hr = t => new Date(t + 'T00:00').toLocaleDateString('id-ID', { weekday: 'long' });
@@ -560,11 +593,32 @@ pages.dash = async el => {
   qrMuat().catch(() => { });
   $('#sk').onclick = () => modal(`<div class="idwrap"><h4>Kartu ID siswa</h4>${kartuId(s, s.jk === 'P' || /F$/i.test(s.id || ''))}<small class="mu">Jika kartu ini hilang atau rusak, hubungi pengajar/admin BIMBEL PLUS.</small><div class="mact" style="width:100%"><button type="button" class="btn ghost" data-x>Tutup</button></div></div>`);
   kg.onclick = e => {
-    const b = e.target.closest('button'); if (!b) return; const j = d.jadwal.find(x => x.id_kelas === b.closest('.kc').dataset.id), a = b.dataset.a;
-    if (waktuKelas(j).mulai <= new Date()) { toast('Jam kelas sudah dimulai, izin tidak bisa diubah.'); gambar(); return; }
-    if (a === 'batal') { if (confirm('Batalkan izin untuk pertemuan ini?')) api('ortuIzin', { batal: 1, id: j.izin.id }).then(() => { toast('Izin dibatalkan'); pages.dash(el); }).catch(err => toast(err.message)); return; }
-    formIzin(j, a === 'ubah', el);
-  };
+  const b = e.target.closest('button');
+  if (!b) return;
+  const card = b.closest('.kc');
+  if (!card) return;
+
+  const kid = card.dataset.id;
+  const tgl = card.dataset.tgl;
+  const j = d.jadwal.find(x => x.id_kelas === kid && (!tgl || x.tanggal === tgl));
+  if (!j) return;
+
+  const a = b.dataset.a;
+  if (waktuKelas(j).mulai <= new Date()) {
+    toast('Jam kelas sudah dimulai, izin tidak bisa diubah.');
+    gambar();
+    return;
+  }
+  if (a === 'batal') {
+    if (confirm('Batalkan izin untuk pertemuan ini?')) {
+      api('ortuIzin', { batal: 1, id: j.izin.id })
+        .then(() => { toast('Izin dibatalkan'); pages.dash(el); })
+        .catch(err => toast(err.message));
+    }
+    return;
+  }
+  formIzin(j, a === 'ubah', el);
+};
 };
 
 /* ---------- TAHAP 2: mesin tabel + laporan PDF ---------- */
